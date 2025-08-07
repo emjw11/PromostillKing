@@ -5,6 +5,7 @@ import tkinter.font as tkfont
 from PIL import Image, ImageTk, ImageEnhance
 import os, sys, cv2, traceback, json
 from datetime import datetime
+import subprocess, threading, shutil  # << ADDED
 
 APP_VERSION = "v1.14 (restore button click handlers)"
 LOG_PATH = os.path.join(os.path.expanduser("~"), "Library", "Logs", "PromostillKing.log")
@@ -74,6 +75,56 @@ def asset(rel_in_images: str) -> str:
             return p
     return resource_path(os.path.join("images", rel_in_images))
 
+# ==== NEW: tiny, safe, async sound player ====
+def play_sound_async(wav_name: str):
+    """
+    Non-blocking sound play on macOS app open.
+    Uses `afplay` on macOS. Falls back to winsound on Windows, or paplay/aplay/play on Linux.
+    Bundles fine with PyInstaller as long as the .wav is included in datas.
+    """
+    try:
+        wav_path = asset(wav_name)
+        if not os.path.exists(wav_path):
+            log(f"🔇 Sound file not found: {wav_path}")
+            return
+
+        def _run():
+            try:
+                # macOS: use afplay if present (usually /usr/bin/afplay)
+                if sys.platform == "darwin":
+                    cmd = shutil.which("afplay") or "/usr/bin/afplay"
+                    subprocess.Popen([cmd, wav_path],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                    return
+
+                # Windows fallback
+                if sys.platform.startswith("win"):
+                    try:
+                        import winsound
+                        winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        return
+                    except Exception:
+                        pass
+
+                # Linux-ish: try paplay/aplay/play
+                for c in ("paplay", "aplay", "play"):
+                    cmd = shutil.which(c)
+                    if cmd:
+                        subprocess.Popen([cmd, wav_path],
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                        return
+
+                log("No suitable sound backend found.")
+            except Exception:
+                log("Sound play error:\n" + traceback.format_exc())
+
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        log("Sound setup error:\n" + traceback.format_exc())
+# ==== /NEW ====
+
 def open_snapshot_viewer(video_path, save_dir):
     """
     Snapshot viewer:
@@ -140,8 +191,15 @@ def open_snapshot_viewer(video_path, save_dir):
 class PromostillKingApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.withdraw()  # << HIDE during setup to prevent black flash
         self.title("Promostill King")
         self.geometry("900x600")
+        # Position the window near the top, centered horizontally
+        self.update_idletasks()
+        w, h = 900, 600
+        sw = self.winfo_screenwidth()
+        x = max(0, (sw - w)//2)
+        self.geometry(f"{w}x{h}+{x}+20")
         self.resizable(False, False)
         self.video_path = None
         self.output_dir = None
@@ -216,11 +274,17 @@ class PromostillKingApp(tk.Tk):
         self.video_list = tk.Listbox(self, bg=self.prefs["bg"], fg=self.prefs["fg"], font=self.v_font)
         self._apply_prefs_live(initial=True)
 
+        # Show window only after everything is ready (prevents black flash)
+        self.deiconify()  # << SHOW now
+
         # Customize panel shortcuts
         self.bind_all("<Command-comma>", self.open_customize)
         self.bind_all("<Key-c>", self.open_customize)
 
         self.after(100, self._force_front)
+
+        # 🔔 Play opening sound shortly after window appears
+        self.after(250, lambda: play_sound_async("trumpet.wav"))
 
     def _force_front(self):
         try:

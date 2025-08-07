@@ -5,7 +5,7 @@ a = Analysis(
     ['PromostillKing.py'],
     pathex=[],
     binaries=[],
-    datas=[('images', 'images')],
+    datas=[('images', 'images'), ('images/trumpet.wav', 'images')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
